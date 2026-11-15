@@ -5538,6 +5538,48 @@ are **Galerkin** or **NonGalerkin**
 
       <runname>.Solver.Linear.Preconditioner.PFMG.RAPType = "Galerkin"  ## Python syntax
 
+*string* **Solver.Linear.Preconditioner.MGSemi.CoarsenDZ** Nominal This
+key specifies the layer thickness the **MGSemi** preconditioner uses to
+choose its coarsening directions.  Valid values are **Nominal**,
+**MinDZ** and **LayerMerge**.  **Nominal** uses
+**ComputationalGrid.DZ**.  **MinDZ** uses **ComputationalGrid.DZ** times
+the smallest dz multiplier (see **Solver.Nonlinear.VariableDz**), the
+thinnest real layer.  **LayerMerge** tracks the real layer thicknesses of
+an **nzList** dz scaling and merges layers in pairs at each coarsening in
+z; for other dz scaling types it acts as **MinDZ**.  Without variable dz
+all three are the same.  With variable dz, **ComputationalGrid.DZ** is
+only a nominal value, and coarsening on it can coarsen x and y first even
+when the top layers are much thinner than the horizontal spacing.
+**MinDZ** can also coarsen in z too early when a single thin layer sits in
+an otherwise uniform column; **LayerMerge** is less sensitive to that.
+
+.. container:: list
+
+   ::
+
+      pfset Solver.Linear.Preconditioner.MGSemi.CoarsenDZ    "MinDZ"     ## TCL syntax
+
+      <runname>.Solver.Linear.Preconditioner.MGSemi.CoarsenDZ = "MinDZ"  ## Python syntax
+
+*string* **Solver.Linear.Preconditioner.PFMG.CoarsenDZ** Nominal This key
+specifies the layer thickness passed to *Hypre* as the grid spacing in z
+for the **PFMG** and **PFMGOctree** preconditioners (use
+**Solver.Linear.Preconditioner.PFMGOctree.CoarsenDZ** for the latter).
+*Hypre* uses the spacing to choose coarsening directions and relaxation
+weights.  Valid values are **Nominal**, **MinDZ** and **Matrix**.
+**Nominal** passes **ComputationalGrid.DZ**; **MinDZ** passes
+**ComputationalGrid.DZ** times the smallest dz multiplier; **Matrix**
+passes no spacing, so *Hypre* estimates it from the matrix coefficients.
+Without variable dz, **Nominal** and **MinDZ** are the same.
+
+.. container:: list
+
+   ::
+
+      pfset Solver.Linear.Preconditioner.PFMG.CoarsenDZ    "Matrix"     ## TCL syntax
+
+      <runname>.Solver.Linear.Preconditioner.PFMG.CoarsenDZ = "Matrix"  ## Python syntax
+
 
 *logical* **Solver.ResetSurfacePressure** False This key changes any surface pressure greater than a threshold value to 
 another value in between solver timesteps. It works differently than the Spinup keys and is intended to 

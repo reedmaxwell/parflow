@@ -45,6 +45,8 @@ typedef struct {
   int max_levels;
   int min_NX, min_NY, min_NZ;
 
+  int coarsen_dz;   /* CoarsenDZ: 0 Nominal, 1 MinDZ, 2 LayerMerge */
+
   int time_index;
 } PublicXtra;
 
@@ -873,8 +875,45 @@ PFModule     *MGSemiInitInstanceXtra(
 
     coarsen_l = talloc(int, (max_levels - 1));
 
+    /* Choose the z spacing for coarsening decisions (CoarsenDZ).  With
+     * variable dz, ComputationalGrid.DZ is only a nominal value; the real
+     * layers are DZ * dz_mult. */
+    double nominal_DZ = DZ;
+    double *dz_layers = NULL;
+    int coarsen_dz = public_xtra->coarsen_dz;
+    if (coarsen_dz == 2)
+    {
+      dz_layers = talloc(double, NZ);
+      if (dzScaleLayerMultipliers(NZ, dz_layers))
+      {
+        for (int kk = 0; kk < NZ; kk++)
+          dz_layers[kk] *= nominal_DZ;
+      }
+      else
+      {
+        /* LayerMerge needs an nzList dzScale; use MinDZ otherwise */
+        tfree(dz_layers);
+        dz_layers = NULL;
+        coarsen_dz = 1;
+      }
+    }
+    if (coarsen_dz == 1)
+      DZ = nominal_DZ * dzScaleMinMultiplier(grid);
+    double coarsen_DZ0 = DZ;
+    if (dz_layers != NULL)
+    {
+      for (int kk = 0; kk < NZ; kk++)
+        coarsen_DZ0 = (kk == 0) ? dz_layers[0] : pfmin(coarsen_DZ0, dz_layers[kk]);
+    }
+
     for (l = 0; l < (max_levels - 1); l++)
     {
+      if (dz_layers != NULL)
+      {
+        DZ = dz_layers[0];
+        for (int kk = 1; kk < NZ; kk++)
+          DZ = pfmin(DZ, dz_layers[kk]);
+      }
       min_spacing = DX + DY + DZ;
       min_spacing_direction = -1;
       if ((NX >= min_NX) && (DX < min_spacing))
@@ -910,12 +949,23 @@ PFModule     *MGSemiInitInstanceXtra(
           break;
 
         case 2:
+          if (dz_layers != NULL)
+          {
+            /* coarse layer kc merges fine layers 2kc and 2kc+1 */
+            for (int kc = 0; kc < (NZ + 1) / 2; kc++)
+              dz_layers[kc] = dz_layers[2 * kc]
+                              + ((2 * kc + 1 < NZ) ? dz_layers[2 * kc + 1] : 0.0);
+          }
           DZ *= 2;
           NZ = (NZ + 1) / 2;
           break;
       }
 
       coarsen_l[l] = min_spacing_direction;
+    }
+    if (dz_layers != NULL)
+    {
+      tfree(dz_layers);
     }
     num_levels = l + 1;
 
@@ -932,6 +982,9 @@ PFModule     *MGSemiInitInstanceXtra(
 
       log_file = OpenLogFile("MGSemi");
 
+      fprintf(log_file, "CoarsenDZ %s: nominal DZ %g, coarsening DZ at level 0 %g\n",
+              (coarsen_dz == 0) ? "Nominal" : ((coarsen_dz == 1) ? "MinDZ" : "LayerMerge"),
+              nominal_DZ, coarsen_DZ0);
       fprintf(log_file, "coarsening direction\n");
       fprintf(log_file, "--------------------\n");
       for (l = 0; l < (num_levels - 1); l++)
@@ -1323,6 +1376,18 @@ PFModule   *MGSemiNewPublicXtra(char *name)
 
   sprintf(key, "%s.MaxMinNZ", name);
   public_xtra->min_NZ = GetIntDefault(key, 1);
+
+  /* Layer thickness used to choose coarsening directions:
+   *   Nominal    ComputationalGrid.DZ (default)
+   *   MinDZ      DZ * smallest dz multiplier (equals Nominal without
+   *              variable dz)
+   *   LayerMerge track the real layer thicknesses (nzList dzScale) and merge
+   *              layers in pairs at each z coarsening; otherwise MinDZ */
+  NameArray coarsen_dz_na = NA_NewNameArray("Nominal MinDZ LayerMerge");
+  sprintf(key, "%s.CoarsenDZ", name);
+  switch_name = GetStringDefault(key, "Nominal");
+  public_xtra->coarsen_dz = NA_NameToIndexExitOnError(coarsen_dz_na, switch_name, key);
+  NA_FreeNameArray(coarsen_dz_na);
 
   (public_xtra->time_index) = RegisterTiming("MGSemi");
 

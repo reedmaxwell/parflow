@@ -448,3 +448,146 @@ int  dzScaleSizeOfTempData()
 {
   return 0;
 }
+
+/*--------------------------------------------------------------------------
+ * dzScaleIsVariable
+ *
+ * Returns 1 if Solver.Nonlinear.VariableDz is on.
+ *--------------------------------------------------------------------------*/
+
+int dzScaleIsVariable()
+{
+  NameArray switch_na = NA_NewNameArray("False True");
+  char *switch_name = GetStringDefault("Solver.Nonlinear.VariableDz", "False");
+  int variable_dz = NA_NameToIndexExitOnError(switch_na, switch_name,
+                                              "Solver.Nonlinear.VariableDz");
+
+  NA_FreeNameArray(switch_na);
+  return variable_dz;
+}
+
+/*--------------------------------------------------------------------------
+ * dzScaleMinMultiplier
+ *
+ * Returns the smallest dz multiplier over the domain, read from the dzScale
+ * input (Constant, PFBFile or nzList), or 1.0 when VariableDz is off.  The
+ * multigrid preconditioners use it to choose coarsening directions from the
+ * thinnest real layer, DZ * min(dz_mult), instead of ComputationalGrid.DZ.
+ *
+ * The preconditioners set up their coarsening when the solver instance is
+ * created, before SetProblemData fills ProblemDataZmult, so the multipliers
+ * are read from the input here.  Non-positive values (for example in
+ * inactive cells of a PFB file) are ignored.  For PFBFile the file is read
+ * onto grid and the minimum is reduced over all processes.
+ *--------------------------------------------------------------------------*/
+
+double dzScaleMinMultiplier(Grid *grid)
+{
+  double min_mult = 1.0e30;
+  char key[IDB_MAX_KEY_LEN];
+
+  if (!dzScaleIsVariable())
+    return 1.0;
+
+  NameArray type_na = NA_NewNameArray("Constant PFBFile nzList");
+  char *type_name = GetString("dzScale.Type");
+  int type = NA_NameToIndexExitOnError(type_na, type_name, "dzScale.Type");
+  NA_FreeNameArray(type_na);
+
+  switch (type)
+  {
+    /* Constant per region */
+    case 0:
+    {
+      NameArray regions = NA_NewNameArray(GetString("dzScale.GeomNames"));
+      for (int ir = 0; ir < NA_Sizeof(regions); ir++)
+      {
+        sprintf(key, "Geom.%s.dzScale.Value", NA_IndexToName(regions, ir));
+        double value = GetDouble(key);
+        if (value > 0.0)
+          min_mult = pfmin(min_mult, value);
+      }
+      NA_FreeNameArray(regions);
+      break;
+    }
+
+    /* PFB file */
+    case 1:
+    {
+      Vector *values = NewVectorType(grid, 1, 1, vector_cell_centered);
+      int is;
+
+      ReadPFBinary(GetString("Geom.domain.dzScale.FileName"), values);
+      ForSubgridI(is, GridSubgrids(grid))
+      {
+        Subgrid   *subgrid = GridSubgrid(grid, is);
+        Subvector *v_sub = VectorSubvector(values, is);
+        double    *v_dat = SubvectorData(v_sub);
+        int i, j, k;
+        int ix = SubgridIX(subgrid), iy = SubgridIY(subgrid), iz = SubgridIZ(subgrid);
+        int nx = SubgridNX(subgrid), ny = SubgridNY(subgrid), nz = SubgridNZ(subgrid);
+
+        for (k = iz; k < iz + nz; k++)
+          for (j = iy; j < iy + ny; j++)
+            for (i = ix; i < ix + nx; i++)
+            {
+              double value = v_dat[SubvectorEltIndex(v_sub, i, j, k)];
+              if (value > 0.0)
+                min_mult = pfmin(min_mult, value);
+            }
+      }
+      FreeVector(values);
+      break;
+    }
+
+    /* list of values by layer */
+    case 2:
+    {
+      int nz_list = GetInt("dzScale.nzListNumber");
+      for (int k = 0; k < nz_list; k++)
+      {
+        sprintf(key, "Cell.%d.dzScale.Value", k);
+        double value = GetDouble(key);
+        if (value > 0.0)
+          min_mult = pfmin(min_mult, value);
+      }
+      break;
+    }
+  }
+
+  amps_Invoice result_invoice = amps_NewInvoice("%d", &min_mult);
+  amps_AllReduce(amps_CommWorld, result_invoice, amps_Min);
+  amps_FreeInvoice(result_invoice);
+
+  if (min_mult > 1.0e29)
+    min_mult = 1.0;
+
+  return min_mult;
+}
+
+/*--------------------------------------------------------------------------
+ * dzScaleLayerMultipliers
+ *
+ * For an nzList dzScale with nz entries, fills mult[0..nz-1] (k = 0 at the
+ * bottom) and returns 1.  Returns 0 otherwise (VariableDz off, another
+ * dzScale type, or a different number of layers).
+ *--------------------------------------------------------------------------*/
+
+int dzScaleLayerMultipliers(int nz, double *mult)
+{
+  char key[IDB_MAX_KEY_LEN];
+
+  if (!dzScaleIsVariable())
+    return 0;
+  if (strcmp(GetString("dzScale.Type"), "nzList") != 0)
+    return 0;
+  if (GetInt("dzScale.nzListNumber") != nz)
+    return 0;
+
+  for (int k = 0; k < nz; k++)
+  {
+    sprintf(key, "Cell.%d.dzScale.Value", k);
+    mult[k] = GetDouble(key);
+  }
+  return 1;
+}

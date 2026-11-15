@@ -2795,6 +2795,23 @@ Solver:
                 - Galerkin
                 - NonGalerkin
 
+        # MGSemi: Nominal, MinDZ, LayerMerge.  PFMG and PFMGOctree: Nominal, MinDZ, Matrix.
+        CoarsenDZ:
+          help: >
+            [Type: string] Layer thickness used to choose multigrid coarsening directions. Nominal uses ComputationalGrid.DZ;
+            MinDZ uses ComputationalGrid.DZ times the smallest dz multiplier (the thinnest real layer); LayerMerge (MGSemi only)
+            tracks the real layers of an nzList dz scaling and merges them in pairs at each z coarsening; Matrix (PFMG and
+            PFMGOctree only) passes no spacing to Hypre, which estimates it from the matrix. Without variable dz, Nominal and
+            MinDZ are the same.
+          default: Nominal
+          domains:
+            EnumDomain:
+              enum_list:
+                - Nominal
+                - MinDZ
+                - LayerMerge
+                - Matrix
+
   # Solver.Nonlinear.{} keys
 
   # missing from manual

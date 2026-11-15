@@ -766,6 +766,9 @@ void dzScaleFreeInstanceXtra(void);
 PFModule *dzScaleNewPublicXtra(void);
 void dzScaleFreePublicXtra(void);
 int dzScaleSizeOfTempData(void);
+int dzScaleIsVariable(void);
+double dzScaleMinMultiplier(Grid *grid);
+int dzScaleLayerMultipliers(int nz, double *mult);
 
 /* RMM patterned FB (flow boundary) input from DZ scale,
  * three modules called  */

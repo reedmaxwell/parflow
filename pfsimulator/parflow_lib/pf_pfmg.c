@@ -42,6 +42,7 @@ typedef struct {
   int num_post_relax;
   int smoother;
   int raptype;
+  int coarsen_dz;   /* CoarsenDZ: 0 Nominal, 1 MinDZ, 2 Matrix */
 
   int hypre_logging;
 
@@ -166,6 +167,11 @@ PFModule  *PFMGInitInstanceXtra(
 
   HypreAssembleGrid(grid, &(instance_xtra->hypre_grid), instance_xtra->dxyz);
 
+  /* CoarsenDZ MinDZ: use the thinnest real layer.  HypreAssembleGrid sets
+   * dxyz only when grid is given, so the scaling is applied once. */
+  if (grid != NULL && public_xtra->coarsen_dz == 1)
+    instance_xtra->dxyz[2] *= dzScaleMinMultiplier(grid);
+
   /* Reset the HYPRE solver for each recompute of the PC matrix.
    * This reset will require a matrix copy from PF format to HYPRE format. */
   if (pf_Bmat != NULL)
@@ -215,8 +221,11 @@ PFModule  *PFMGInitInstanceXtra(
 
     HYPRE_StructPFMGSetSkipRelax(instance_xtra->hypre_pfmg_data, 1);
 
-    HYPRE_StructPFMGSetDxyz(instance_xtra->hypre_pfmg_data,
-                            instance_xtra->dxyz);
+    if (public_xtra->coarsen_dz != 2)
+    {
+      HYPRE_StructPFMGSetDxyz(instance_xtra->hypre_pfmg_data,
+                              instance_xtra->dxyz);
+    }
 
     /* Enable logging BEFORE setup so that norms arrays are allocated */
     if (public_xtra->hypre_logging)
@@ -320,6 +329,20 @@ PFModule  *PFMGNewPublicXtra(char *name)
   {
     char *hypre_logging_str = GetStringDefault("Solver.Linear.Preconditioner.HypreLogging", "False");
     public_xtra->hypre_logging = (!strcmp(hypre_logging_str, "True")) ? 1 : 0;
+  }
+
+  /* Layer thickness passed to HYPRE as dxyz[2] (HYPRE uses dxyz to choose
+   * coarsening directions and relaxation weights):
+   *   Nominal  ComputationalGrid.DZ (default)
+   *   MinDZ    DZ * smallest dz multiplier (equals Nominal without variable
+   *            dz)
+   *   Matrix   do not pass dxyz; HYPRE estimates the spacing from the matrix */
+  {
+    NameArray coarsen_dz_na = NA_NewNameArray("Nominal MinDZ Matrix");
+    sprintf(key, "%s.CoarsenDZ", name);
+    char *coarsen_dz_name = GetStringDefault(key, "Nominal");
+    public_xtra->coarsen_dz = NA_NameToIndexExitOnError(coarsen_dz_na, coarsen_dz_name, key);
+    NA_FreeNameArray(coarsen_dz_na);
   }
 
   public_xtra->time_index_pfmg = RegisterTiming("PFMG");
