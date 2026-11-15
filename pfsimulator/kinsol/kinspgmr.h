@@ -328,6 +328,9 @@ int KINSpgmr(void *kin_mem, int maxl, int maxlrst, int msbpre,
              KINSpgmruserAtimesFn userAtimes,
              void *P_data);
 
+/* Recomputes sJpnorm and sfdotJp for a step changed after the linear solve (step limiter); work is overwritten */
+void KINSpgmrStepSlope(void *kinsol_mem, N_Vector step, N_Vector work);
+
 END_EXTERN_C
 
 #endif

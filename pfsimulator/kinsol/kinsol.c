@@ -202,6 +202,10 @@ static int  KINLineSearch(KINMem kin_mem, real *fnormp, real *f1normp,
 
 static boole KINInitialConstraint(KINMem kin_mem);
 
+static void KINTrialPoint(KINMem kin_mem, real rl);
+
+static void KINTrialLimiterSlopes(KINMem kin_mem);
+
 static boole KINInitialStop(KINMem kin_mem);
 
 static int  KINLinSolDrv(KINMem kinmem, N_Vector bb, N_Vector xx);
@@ -329,6 +333,15 @@ void *KINMalloc(integer Neq, FILE *msgfp, void *machEnv)
   lsolve = NULL;
   lfree = NULL;
   lmem = NULL;
+  kin_mem->kin_step_limiter = NULL;
+  kin_mem->kin_unlimited_step = NULL;
+  kin_mem->kin_trial_limiter = NULL;
+  kin_mem->kin_trial_limiter_on = 1;
+  kin_mem->kin_nr_trial_limited = 0;
+  kin_mem->kin_any_trial_limited = 0;
+  kin_mem->kin_lim_fval = NULL;
+  kin_mem->kin_lim_step = NULL;
+  kin_mem->kin_lim_work = NULL;
   kin_mem->kin_Neq = Neq;
   kin_mem->kin_msgfp = fp;
   uround = UnitRoundoff();
@@ -694,6 +707,8 @@ int KINSol(void *kinmem, integer Neq,
            boole optIn, long int iopt[], real ropt[], void *f_data)
 {
   real fnormp = 0.0, f1normp = 0.0, epsmin = 0.0;
+  real unlimited_sfdotJp = 0.0, unlimited_sJpnorm = 0.0;
+  int nr_limited = 0;
   int ret, globalstratret = 0;
   boole maxStepTaken = 0, noMinEps;
   N_Vector bb, xx;
@@ -811,6 +826,43 @@ int KINSol(void *kinmem, integer Neq,
       break;
 
 
+    /* Optional per-cell step limiter: keep the Krylov step for the fallback, let the limiter change the
+     * step, and recompute the slope terms of the changed step, which the line search needs. A limited
+     * step that is not a descent direction is not searched along: the unlimited step is used. */
+    nr_limited = 0;
+    if (kin_mem->kin_step_limiter != NULL)
+    {
+      N_VScale(ONE, pp, kin_mem->kin_unlimited_step);
+      unlimited_sfdotJp = sfdotJp;
+      unlimited_sJpnorm = sJpnorm;
+      nr_limited = kin_mem->kin_step_limiter(uu, pp, f_data);
+      if (nr_limited > 0)
+        KINSpgmrStepSlope(kin_mem, pp, unew);
+      if (printfl > 0)
+        fprintf(msgfp, "KINSol step limiter: %d cells limited\n", nr_limited);
+      if (nr_limited > 0 && sfdotJp >= ZERO)
+      {
+        N_VScale(ONE, kin_mem->kin_unlimited_step, pp);
+        sfdotJp = unlimited_sfdotJp;
+        sJpnorm = unlimited_sJpnorm;
+        nr_limited = 0;
+        if (printfl > 0)
+          fprintf(msgfp, "KINSol step limiter: limited step is no descent direction, unlimited step used\n");
+      }
+    }
+
+    /* Trial limiter: keep F(uu) and the step. F(uu) is needed to recompute the slope terms of a
+     * limited step after the global strategy has overwritten fval; the step is restored if the
+     * limited search fails. */
+    if (kin_mem->kin_trial_limiter != NULL)
+    {
+      N_VScale(ONE, fval, kin_mem->kin_lim_fval);
+      N_VScale(ONE, pp, kin_mem->kin_lim_step);
+      kin_mem->kin_trial_limiter_on = 1;
+      kin_mem->kin_nr_trial_limited = 0;
+      kin_mem->kin_any_trial_limited = 0;
+    }
+
     /* call the appropriate routine to calculate an acceptable step pp  */
 
     if (globalstrategy == INEXACT_NEWTON)
@@ -819,6 +871,37 @@ int KINSol(void *kinmem, integer Neq,
     else if (globalstrategy == LINESEARCH)
       globalstratret =
         KINLineSearch((struct KINMemRec *)kinmem, &fnormp, &f1normp, &maxStepTaken);
+
+    /* Fallback: if the line search found no acceptable point along the limited step, it has left uu and
+     * fval unchanged; search again along the unlimited Krylov step */
+    if (nr_limited > 0 && globalstrategy == LINESEARCH && globalstratret == 1)
+    {
+      N_VScale(ONE, kin_mem->kin_unlimited_step, pp);
+      sfdotJp = unlimited_sfdotJp;
+      sJpnorm = unlimited_sJpnorm;
+      if (printfl > 0)
+        fprintf(msgfp, "KINSol step limiter: line search failed on the limited step, unlimited step used\n");
+      globalstratret =
+        KINLineSearch((struct KINMemRec *)kinmem, &fnormp, &f1normp, &maxStepTaken);
+    }
+
+    /* Trial limiter fallback: the line search found no acceptable point with the limiter applied to
+     * its trial iterates. It has left uu and fval unchanged and may have rescaled pp; restore pp and
+     * search again without the limiter. */
+    if (kin_mem->kin_trial_limiter != NULL && kin_mem->kin_any_trial_limited
+        && globalstrategy == LINESEARCH && globalstratret == 1)
+    {
+      N_VScale(ONE, kin_mem->kin_lim_step, pp);
+      kin_mem->kin_trial_limiter_on = 0;
+      if (printfl > 0)
+        fprintf(msgfp, "KINSol trial limiter: line search failed with the limiter, searching without it\n");
+      globalstratret =
+        KINLineSearch((struct KINMemRec *)kinmem, &fnormp, &f1normp, &maxStepTaken);
+      kin_mem->kin_trial_limiter_on = 1;
+    }
+    if (kin_mem->kin_trial_limiter != NULL && printfl > 0)
+      fprintf(msgfp, "KINSol trial limiter: %d cells limited in the accepted iterate\n",
+              kin_mem->kin_nr_trial_limited);
 
     /* if too many beta condition failures, stop iteration  */
 
@@ -919,6 +1002,14 @@ void KINFree(void *kinsol_mem)
     return;
 
   KINFreeVectors(kin_mem);
+  if (kin_mem->kin_unlimited_step != NULL)
+    N_VFree(kin_mem->kin_unlimited_step);
+  if (kin_mem->kin_lim_fval != NULL)
+    N_VFree(kin_mem->kin_lim_fval);
+  if (kin_mem->kin_lim_step != NULL)
+    N_VFree(kin_mem->kin_lim_step);
+  if (kin_mem->kin_lim_work != NULL)
+    N_VFree(kin_mem->kin_lim_work);
 
   if (kin_mem != NULL)
     lfree(kin_mem);
@@ -1139,6 +1230,50 @@ static boole KINInitialStop(KINMem kin_mem)
 
 
 
+/***************************KINTrialPoint**************************
+*
+*  Forms the trial iterate unew = uu + rl * pp and, if a trial limiter is
+*  set and switched on, lets it change unew in place. The number of
+*  entries it changed is kept in kin_nr_trial_limited, so after the global
+*  strategy returns it refers to the accepted iterate.
+*
+******************************************************************/
+
+static void KINTrialPoint(KINMem kin_mem, real rl)
+{
+  N_VLinearSum(ONE, uu, rl, pp, unew);
+  kin_mem->kin_nr_trial_limited = 0;
+  if (kin_mem->kin_trial_limiter != NULL && kin_mem->kin_trial_limiter_on)
+  {
+    kin_mem->kin_nr_trial_limited = kin_mem->kin_trial_limiter(uu, unew, f_data);
+    if (kin_mem->kin_nr_trial_limited > 0)
+      kin_mem->kin_any_trial_limited = 1;
+    if (printfl > 2)
+      fprintf(msgfp, "KINSol trial limiter: lam %12.5e, %d cells limited\n",
+              rl, kin_mem->kin_nr_trial_limited);
+  }
+}
+
+/***************************KINTrialLimiterSlopes******************
+*
+*  The accepted iterate was changed by the trial limiter, so the step
+*  taken is unew - uu and no longer a multiple of pp. Recompute sJpnorm
+*  and sfdotJp for that step (KINForcingTerm uses them). They are defined
+*  with F(uu), which was saved in kin_lim_fval before the global strategy
+*  overwrote fval; fval is pointed at the saved copy for the computation.
+*
+******************************************************************/
+
+static void KINTrialLimiterSlopes(KINMem kin_mem)
+{
+  N_Vector fval_new = fval;
+
+  N_VLinearSum(ONE, unew, -ONE, uu, kin_mem->kin_lim_step);
+  fval = kin_mem->kin_lim_fval;
+  KINSpgmrStepSlope(kin_mem, kin_mem->kin_lim_step, kin_mem->kin_lim_work);
+  fval = fval_new;
+}
+
 /***************************KINInexactNewton***********************
 *
 *  This routine is the main driver for the inexact Newton algorithm.
@@ -1200,8 +1335,10 @@ static int  KINInexactNewton(KINMem kin_mem, real *fnormp, real *f1normp,
   sJpnorm = sJpnorm * ratio;
 
   /*  compute the iterate unew !! */
-  N_VLinearSum(ONE, uu, ONE, pp, unew);
+  KINTrialPoint(kin_mem, ONE);
   func(Neq, unew, fval, f_data);   nfe++;
+  if (kin_mem->kin_nr_trial_limited > 0)
+    KINTrialLimiterSlopes(kin_mem);
   *fnormp = N_VWL2Norm(fval, fscale);
   *f1normp = HALF * (*fnormp) * (*fnormp);
   if (printfl > 1)
@@ -1284,7 +1421,7 @@ static int  KINLineSearch(KINMem kin_mem, real *fnormp, real *f1normp,
   nfesav = nfe;
 
   loop {
-    N_VLinearSum(ONE, uu, rl, pp, unew);
+    KINTrialPoint(kin_mem, rl);
     func(Neq, unew, fval, f_data);   nfe++;
     *fnormp = N_VWL2Norm(fval, fscale);
     *f1normp = HALF * (*fnormp) * (*fnormp);
@@ -1303,6 +1440,7 @@ static int  KINLineSearch(KINMem kin_mem, real *fnormp, real *f1normp,
       /* no satisfactory unew can be found sufficiently distinct from uu.
        * copy uu into unew and return.  */
       N_VScale(ONE, uu, unew);
+      kin_mem->kin_nr_trial_limited = 0;
       func(Neq, unew, fval, f_data);   nfe++;
       *fnormp = N_VWL2Norm(fval, fscale);
       *f1normp = HALF * (*fnormp) * (*fnormp);
@@ -1333,7 +1471,7 @@ static int  KINLineSearch(KINMem kin_mem, real *fnormp, real *f1normp,
         rlprev = rl;
         rl = MIN(TWO * rl, rlmax);
         rladjust++;
-        N_VLinearSum(ONE, uu, rl, pp, unew);
+        KINTrialPoint(kin_mem, rl);
         func(Neq, unew, fval, f_data);   nfe++;
         *fnormp = N_VWL2Norm(fval, fscale);
         *f1normp = HALF * (*fnormp) * (*fnormp);
@@ -1357,7 +1495,7 @@ static int  KINLineSearch(KINMem kin_mem, real *fnormp, real *f1normp,
         rlincr = HALF * rldiff;
         rl = rllo + rlincr;
         rladjust++;
-        N_VLinearSum(ONE, uu, rl, pp, unew);
+        KINTrialPoint(kin_mem, rl);
         func(Neq, unew, fval, f_data);   nfe++;
         *fnormp = N_VWL2Norm(fval, fscale);
         *f1normp = HALF * *fnormp * *fnormp;
@@ -1384,7 +1522,7 @@ static int  KINLineSearch(KINMem kin_mem, real *fnormp, real *f1normp,
          *  u value that satisfied the alpha condition and continue.
          *  increment counter on number of steps beta condition not satisfied */
 
-        N_VLinearSum(ONE, uu, rllo, pp, unew);
+        KINTrialPoint(kin_mem, rllo);
         func(Neq, unew, fval, f_data);   nfe++;
         *fnormp = N_VWL2Norm(fval, fscale);
         *f1normp = HALF * *fnormp * *fnormp;
@@ -1399,9 +1537,15 @@ static int  KINLineSearch(KINMem kin_mem, real *fnormp, real *f1normp,
             "%d\n", rladjust);
 
   /* scale the following two expressions by rl and ratio for
-   *    subsequent use in the  KINForcingTerm routine */
-  sfdotJp = sfdotJp * rl * ratio;
-  sJpnorm = sJpnorm * rl * ratio;
+   *    subsequent use in the  KINForcingTerm routine; if the trial limiter
+   *    changed the accepted iterate, recompute them for the step taken */
+  if (kin_mem->kin_nr_trial_limited > 0)
+    KINTrialLimiterSlopes(kin_mem);
+  else
+  {
+    sfdotJp = sfdotJp * rl * ratio;
+    sJpnorm = sJpnorm * rl * ratio;
+  }
 
   if (rl * pnorm > POINT99 * mxnewtstep)
     *maxStepTaken = TRUE;

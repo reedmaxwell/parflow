@@ -555,5 +555,23 @@ static int KINSpgmrPSolve(void *kinsol_mem, N_Vector r, N_Vector z,
 }
 
 
+/*************** KINSpgmrStepSlope *************************************
 
+ This routine recomputes sJpnorm and sfdotJp, as at the end of KINSpgmrSolve, for a
+ step that was changed after the linear solve (the per-cell step limiter). The line
+ search needs the slope of the step it searches along. work is overwritten.
 
+**********************************************************************/
+
+void KINSpgmrStepSlope(void *kinsol_mem, N_Vector step, N_Vector work)
+{
+  KINMem kin_mem;
+
+  kin_mem = (KINMem)kinsol_mem;
+
+  KINSpgmrAtimes(kin_mem, step, work);
+  sJpnorm = N_VWL2Norm(work, fscale);
+  N_VProd(work, fscale, work);
+  N_VProd(work, fscale, work);
+  sfdotJp = N_VDotProd(fval, work);
+}

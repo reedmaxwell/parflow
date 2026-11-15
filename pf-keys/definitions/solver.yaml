@@ -2956,6 +2956,50 @@ Solver:
         DoubleValue:
           min_value: 0.0
 
+    PondingStepLimiter:
+      __doc__: >
+        [Type: logical] Per-cell limiter of the Newton step at the ponding switch (embedded KINSOL only).
+      __value__:
+        help: >
+          [Type: boolean/string] This key turns on a per-cell limiter of the Newton step. A top cell whose Newton update would carry it
+          across zero pressure is stopped just past zero, so the next iteration evaluates the Jacobian on the cell's new side of the
+          ponding switch. The converged equations are unchanged. Only available with the embedded KINSOL.
+        default: False
+        domains:
+          BoolDomain:
+
+      Offset:
+        help: >
+          [Type: double] Distance past zero pressure [L] at which a limited cell is placed.
+        default: 0.00001
+        domains:
+          DoubleValue:
+            min_value: 0.0
+
+      Direction:
+        help: >
+          [Type: string] Which crossings of zero pressure are limited. Both limits wetting and drying crossings, Wetting limits only
+          dry to ponded, and Drying limits only ponded to dry.
+        default: Both
+        domains:
+          EnumDomain:
+            enum_list:
+              - Both
+              - Wetting
+              - Drying
+
+      Type:
+        help: >
+          [Type: string] Where the limiter is applied. InLineSearch applies it to every trial iterate of the line search, so
+          backtracking scales the Newton step and the limiter acts on the result. PreLineSearch applies it once to the Newton
+          step before the line search.
+        default: InLineSearch
+        domains:
+          EnumDomain:
+            enum_list:
+              - InLineSearch
+              - PreLineSearch
+
     Globalization:
       help: >
         [Type: string] This key specifies the type of global strategy to use. Possible choices for this key are InexactNewton and
