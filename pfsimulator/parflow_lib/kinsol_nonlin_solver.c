@@ -34,12 +34,12 @@
 static double ponding_step_limiter_offset = 1.0e-5;
 
 /* Which crossings of p = 0 the ponding step limiter stops (Solver.Nonlinear.PondingStepLimiter.Direction):
- * Both (default), Wetting (dry -> ponded only) or Drying (ponded -> dry only). The values are the
+ * Both, Wetting (dry -> ponded only; default) or Drying (ponded -> dry only). The values are the
  * indices of the names in the key's name array. */
 #define PONDING_STEP_LIMITER_BOTH    0
 #define PONDING_STEP_LIMITER_WETTING 1
 #define PONDING_STEP_LIMITER_DRYING  2
-static int ponding_step_limiter_direction = PONDING_STEP_LIMITER_BOTH;
+static int ponding_step_limiter_direction = PONDING_STEP_LIMITER_WETTING;
 
 /* Where the limiter is applied (Solver.Nonlinear.PondingStepLimiter.Type): InLineSearch (default), to
  * every trial iterate of the global strategy, or PreLineSearch, once to the Newton step before the
@@ -1019,7 +1019,7 @@ PFModule  *KinsolNonlinSolverNewPublicXtra()
   ponding_step_limiter_offset = GetDoubleDefault(key, 1.0e-5);
   switch_na = NA_NewNameArray("Both Wetting Drying");
   sprintf(key, "Solver.Nonlinear.PondingStepLimiter.Direction");
-  switch_name = GetStringDefault(key, "Both");
+  switch_name = GetStringDefault(key, "Wetting");
   ponding_step_limiter_direction = NA_NameToIndexExitOnError(switch_na, switch_name, key);
   NA_FreeNameArray(switch_na);
   switch_na = NA_NewNameArray("InLineSearch PreLineSearch");

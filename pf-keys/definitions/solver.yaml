@@ -2980,7 +2980,7 @@ Solver:
         help: >
           [Type: string] Which crossings of zero pressure are limited. Both limits wetting and drying crossings, Wetting limits only
           dry to ponded, and Drying limits only ponded to dry.
-        default: Both
+        default: Wetting
         domains:
           EnumDomain:
             enum_list:
