@@ -79,6 +79,21 @@ typedef struct {
 
   /* ival indices for parallel exec of patchloops */
   int ***ival;
+
+  /* Compact boundary face lists for the patch loops, indexed [face][patch_loc]
+   * like ival, where patch_loc is the patch number, or num_patches plus the
+   * patch number for the overland variant.  Built on the first call of
+   * GrGeomPatchLoopBoxesNoFdir for that patch_loc.
+   *   face_cells   device array of i, j, k for each face, in ival order
+   *   face_count   number of faces in the list
+   *   face_ival0   ival of the first face in the list
+   *   face_built   nonzero once the list has been built; needed because a
+   *                direction with no faces has no array
+   */
+  int ***face_cells;
+  int **face_count;
+  int **face_ival0;
+  char **face_built;
 #endif
 
   /* these fields are used to relate the background with the octree */
@@ -111,6 +126,10 @@ typedef struct {
 #define GrGeomSolidCellFlagDataSize(solid)    ((solid)->mask_size)
 #define GrGeomSolidCellFlagInitialized(solid) ((solid)->loops_masked)
 #define GrGeomSolidCellIval(solid, patch, i)  ((solid)->ival[i][patch])
+#define GrGeomSolidFaceCells(solid, patch, i)     ((solid)->face_cells[i][patch])
+#define GrGeomSolidFaceCount(solid, patch, i)     ((solid)->face_count[i][patch])
+#define GrGeomSolidFaceIvalStart(solid, patch, i) ((solid)->face_ival0[i][patch])
+#define GrGeomSolidFaceListBuilt(solid, patch, i) ((solid)->face_built[i][patch])
 
 #define GrGeomSolidData(solid)          ((solid)->data)
 #define GrGeomSolidPatches(solid)       ((solid)->patches)

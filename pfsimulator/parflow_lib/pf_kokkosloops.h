@@ -706,116 +706,149 @@ static const int FDIR_TABLE[6][3] = {
           (void)i; (void)j; (void)k;                                                                                   \
         }
 
+/**
+ * Debug check for the compact boundary lists.  Compile with
+ * -DPF_BOUNDARY_LIST_CHECK to print, after the first call for each patch
+ * variant and face direction, the number of faces in the list and the ival
+ * of its first face.  Off by default.
+ */
+#ifdef PF_BOUNDARY_LIST_CHECK
+#define BOUNDARY_LIST_CHECK_PRINT(grgeom, patch_num, patch_loc, f, nfaces, ival0)                        \
+        amps_Printf("BLCHECK rank %d solid %p patch %d ovrlnd %d dir %d faces %d ival0 %d\n",              \
+                    amps_Rank(amps_CommWorld), (void*)(grgeom), (patch_num),                               \
+                    (patch_loc) >= GrGeomSolidNumPatches(grgeom), (f), (nfaces), (ival0))
+#else
+#define BOUNDARY_LIST_CHECK_PRINT(grgeom, patch_num, patch_loc, f, nfaces, ival0)
+#endif
+
 /** Loop definition for Kokkos. */
-#define GrGeomPatchLoopBoxesNoFdir_kokkos(i, j, k, grgeom, patch_num, ovrlnd,                                                \
-                                          ix, iy, iz, nx, ny, nz, locals, setup,                                             \
-                                          f_left, f_right, f_down, f_up, f_back, f_front, finalize)                          \
-        {                                                                                                                    \
-          int n_ival = 0;                                                                                                    \
-          for (int PV_f = 0; PV_f < GrGeomOctreeNumFaces; PV_f++)                                                            \
-          {                                                                                                                  \
-            BoxArray* boxes = GrGeomSolidPatchBoxes(grgeom, patch_num, PV_f);                                                \
-                                                                                                                             \
-            int ix_bxs = BoxArrayMinCell(boxes, 0);                                                                          \
-            int iy_bxs = BoxArrayMinCell(boxes, 1);                                                                          \
-            int iz_bxs = BoxArrayMinCell(boxes, 2);                                                                          \
-                                                                                                                             \
-            int nx_bxs = BoxArrayMaxCell(boxes, 0) - ix_bxs + 1;                                                             \
-            int ny_bxs = BoxArrayMaxCell(boxes, 1) - iy_bxs + 1;                                                             \
-            int nz_bxs = BoxArrayMaxCell(boxes, 2) - iz_bxs + 1;                                                             \
-                                                                                                                             \
-            int patch_loc;                                                                                                   \
-            if (ovrlnd)                                                                                                      \
-            patch_loc = GrGeomSolidNumPatches(grgeom) +patch_num;                                                            \
-            else                                                                                                             \
-            patch_loc = patch_num;                                                                                           \
-                                                                                                                             \
-            int *ptr_ival = GrGeomSolidCellIval(grgeom, patch_loc, PV_f);                                                    \
-            if (!(ptr_ival))                                                                                                 \
-            {                                                                                                                \
-              GrGeomSolidCellIval(grgeom, patch_loc, PV_f) =                                                                 \
-                (int*)_talloc_device(sizeof(int) * nx_bxs * ny_bxs * nz_bxs);                                                \
-                                                                                                                             \
-              ptr_ival = GrGeomSolidCellIval(grgeom, patch_loc, PV_f);                                                       \
-              for (int idx = 0; idx < nx_bxs * ny_bxs * nz_bxs; idx++)                                                       \
-              ptr_ival[idx] = -1;                                                                                            \
-                                                                                                                             \
-              for (int PV_box = 0; PV_box < BoxArraySize(boxes); PV_box++)                                                   \
-              {                                                                                                              \
-                Box box = BoxArrayGetBox(boxes, PV_box);                                                                     \
-                int PV_ixl = pfmax(ix, box.lo[0]);                                                                           \
-                int PV_iyl = pfmax(iy, box.lo[1]);                                                                           \
-                int PV_izl = pfmax(iz, box.lo[2]);                                                                           \
-                int PV_ixu = pfmin((ix + nx - 1), box.up[0]);                                                                \
-                int PV_iyu = pfmin((iy + ny - 1), box.up[1]);                                                                \
-                int PV_izu = pfmin((iz + nz - 1), box.up[2]);                                                                \
-                                                                                                                             \
-                for (k = PV_izl; k <= PV_izu; k++)                                                                           \
-                for (j = PV_iyl; j <= PV_iyu; j++)                                                                           \
-                for (i = PV_ixl; i <= PV_ixu; i++)                                                                           \
-                {                                                                                                            \
-                  UNPACK(locals);                                                                                            \
-                  setup;                                                                                                     \
-                  switch (PV_f)                                                                                              \
-                  {                                                                                                          \
-                  f_left;                                                                                                    \
-                  f_right;                                                                                                   \
-                  f_down;                                                                                                    \
-                  f_up;                                                                                                      \
-                  f_back;                                                                                                    \
-                  f_front;                                                                                                   \
-                  }                                                                                                          \
-                  finalize;                                                                                                  \
-                  ptr_ival[(k - iz_bxs) * ny_bxs * nx_bxs + (j - iy_bxs) *                                                   \
-                           nx_bxs + (i - ix_bxs)] = n_ival++;                                                                \
-                }                                                                                                            \
-              }                                                                                                              \
-            }                                                                                                                \
-            else                                                                                                             \
-            {                                                                                                                \
-              int ixl_gpu = pfmax(ix, ix_bxs);                                                                               \
-              int iyl_gpu = pfmax(iy, iy_bxs);                                                                               \
-              int izl_gpu = pfmax(iz, iz_bxs);                                                                               \
-              int nx_gpu = pfmin((ix + nx - 1), BoxArrayMaxCell(boxes, 0)) - ixl_gpu + 1;                                    \
-              int ny_gpu = pfmin((iy + ny - 1), BoxArrayMaxCell(boxes, 1)) - iyl_gpu + 1;                                    \
-              int nz_gpu = pfmin((iz + nz - 1), BoxArrayMaxCell(boxes, 2)) - izl_gpu + 1;                                    \
-                                                                                                                             \
-              if (nx_gpu > 0 && ny_gpu > 0 && nz_gpu > 0)                                                                    \
-              {                                                                                                              \
-                auto lambda_body =                                                                                           \
-                  KOKKOS_LAMBDA(int i, int j, int k)                                                                         \
-                {                                                                                                            \
-                  i += ixl_gpu;                                                                                              \
-                  j += iyl_gpu;                                                                                              \
-                  k += izl_gpu;                                                                                              \
-                                                                                                                             \
-                  int ival = ptr_ival[(k - iz_bxs) * ny_bxs * nx_bxs +                                                       \
-                                      (j - iy_bxs) * nx_bxs + (i - ix_bxs)];                                                 \
-                  if (ival >= 0)                                                                                             \
-                  {                                                                                                          \
-                    UNPACK(locals);                                                                                          \
-                    setup;                                                                                                   \
-                    switch (PV_f)                                                                                            \
-                    {                                                                                                        \
-                    f_left;                                                                                                  \
-                    f_right;                                                                                                 \
-                    f_down;                                                                                                  \
-                    f_up;                                                                                                    \
-                    f_back;                                                                                                  \
-                    f_front;                                                                                                 \
-                    }                                                                                                        \
-                    finalize;                                                                                                \
-                  }                                                                                                          \
-                };                                                                                                           \
-                                                                                                                             \
-                using MDPolicyType_3D = typename Kokkos::MDRangePolicy < Kokkos::Rank < 3 > >;                               \
-                MDPolicyType_3D mdpolicy_3d({ { 0, 0, 0 } }, { { nx_gpu, ny_gpu, nz_gpu } });                                \
-                Kokkos::parallel_for(mdpolicy_3d, lambda_body);                                                              \
-                Kokkos::fence();                                                                                             \
-              }                                                                                                              \
-            }                                                                                                                \
-          }                                                                                                                  \
-          (void)i; (void)j; (void)k;                                                                                         \
+#define GrGeomPatchLoopBoxesNoFdir_kokkos(i, j, k, grgeom, patch_num, ovrlnd,                        \
+                                          ix, iy, iz, nx, ny, nz, locals, setup,                     \
+                                          f_left, f_right, f_down, f_up, f_back, f_front, finalize)  \
+        {                                                                                            \
+          int n_ival = 0;                                                                            \
+          int patch_loc;                                                                             \
+          if (ovrlnd)                                                                                \
+          patch_loc = GrGeomSolidNumPatches(grgeom) + patch_num;                                     \
+          else                                                                                       \
+          patch_loc = patch_num;                                                                     \
+                                                                                                     \
+          for (int PV_f = 0; PV_f < GrGeomOctreeNumFaces; PV_f++)                                    \
+          {                                                                                          \
+            BoxArray* boxes = GrGeomSolidPatchBoxes(grgeom, patch_num, PV_f);                        \
+                                                                                                     \
+            if (!GrGeomSolidFaceListBuilt(grgeom, patch_loc, PV_f))                                  \
+            {                                                                                        \
+              /* First call: walk the boxes on the host in the original order,                       \
+               * clipped to this caller's extents.  Count the faces, allocate the                    \
+               * list, then run the body on each face and record it.  The position                   \
+               * in the list plus the starting ival is the face's ival. */                           \
+              int PV_nfaces = 0;                                                                     \
+              for (int PV_box = 0; PV_box < BoxArraySize(boxes); PV_box++)                           \
+              {                                                                                      \
+                Box box = BoxArrayGetBox(boxes, PV_box);                                             \
+                int PV_cx = pfmin((ix + nx - 1), box.up[0]) - pfmax(ix, box.lo[0]) + 1;              \
+                int PV_cy = pfmin((iy + ny - 1), box.up[1]) - pfmax(iy, box.lo[1]) + 1;              \
+                int PV_cz = pfmin((iz + nz - 1), box.up[2]) - pfmax(iz, box.lo[2]) + 1;              \
+                if (PV_cx > 0 && PV_cy > 0 && PV_cz > 0)                                             \
+                PV_nfaces += PV_cx * PV_cy * PV_cz;                                                  \
+              }                                                                                      \
+                                                                                                     \
+              int *PV_cells = NULL;                                                                  \
+              if (PV_nfaces > 0)                                                                     \
+              PV_cells = (int*)_talloc_device(sizeof(int) * 3 * (size_t)PV_nfaces);                  \
+                                                                                                     \
+              GrGeomSolidFaceCells(grgeom, patch_loc, PV_f) = PV_cells;                              \
+              GrGeomSolidFaceCount(grgeom, patch_loc, PV_f) = PV_nfaces;                             \
+              GrGeomSolidFaceIvalStart(grgeom, patch_loc, PV_f) = n_ival;                            \
+              GrGeomSolidFaceListBuilt(grgeom, patch_loc, PV_f) = 1;                                 \
+                                                                                                     \
+              int PV_n = 0;                                                                          \
+              for (int PV_box = 0; PV_box < BoxArraySize(boxes); PV_box++)                           \
+              {                                                                                      \
+                Box box = BoxArrayGetBox(boxes, PV_box);                                             \
+                int PV_ixl = pfmax(ix, box.lo[0]);                                                   \
+                int PV_iyl = pfmax(iy, box.lo[1]);                                                   \
+                int PV_izl = pfmax(iz, box.lo[2]);                                                   \
+                int PV_ixu = pfmin((ix + nx - 1), box.up[0]);                                        \
+                int PV_iyu = pfmin((iy + ny - 1), box.up[1]);                                        \
+                int PV_izu = pfmin((iz + nz - 1), box.up[2]);                                        \
+                                                                                                     \
+                for (k = PV_izl; k <= PV_izu; k++)                                                   \
+                for (j = PV_iyl; j <= PV_iyu; j++)                                                   \
+                for (i = PV_ixl; i <= PV_ixu; i++)                                                   \
+                {                                                                                    \
+                  UNPACK(locals);                                                                    \
+                  setup;                                                                             \
+                  switch (PV_f)                                                                      \
+                  {                                                                                  \
+                  f_left;                                                                            \
+                  f_right;                                                                           \
+                  f_down;                                                                            \
+                  f_up;                                                                              \
+                  f_back;                                                                            \
+                  f_front;                                                                           \
+                  }                                                                                  \
+                  finalize;                                                                          \
+                  PV_cells[3 * PV_n] = i;                                                            \
+                  PV_cells[3 * PV_n + 1] = j;                                                        \
+                  PV_cells[3 * PV_n + 2] = k;                                                        \
+                  PV_n++;                                                                            \
+                  n_ival++;                                                                          \
+                }                                                                                    \
+              }                                                                                      \
+              BOUNDARY_LIST_CHECK_PRINT(grgeom, patch_num, patch_loc, PV_f, PV_nfaces,               \
+                                        GrGeomSolidFaceIvalStart(grgeom, patch_loc, PV_f));          \
+            }                                                                                        \
+            else                                                                                     \
+            {                                                                                        \
+              /* Later calls: one kernel over the list.  The extent test keeps the                   \
+               * old behavior for callers whose extents are smaller than the first                   \
+               * caller's. */                                                                        \
+              int PV_nfaces = GrGeomSolidFaceCount(grgeom, patch_loc, PV_f);                         \
+              if (PV_nfaces > 0)                                                                     \
+              {                                                                                      \
+                int *PV_cells = GrGeomSolidFaceCells(grgeom, patch_loc, PV_f);                       \
+                int PV_ival0 = GrGeomSolidFaceIvalStart(grgeom, patch_loc, PV_f);                    \
+                int PV_ixl = ix;                                                                     \
+                int PV_iyl = iy;                                                                     \
+                int PV_izl = iz;                                                                     \
+                int PV_ixu = ix + nx;                                                                \
+                int PV_iyu = iy + ny;                                                                \
+                int PV_izu = iz + nz;                                                                \
+                                                                                                     \
+                auto lambda_body =                                                                   \
+                  KOKKOS_LAMBDA(int PV_n)                                                            \
+                {                                                                                    \
+                  int i = PV_cells[3 * PV_n];                                                        \
+                  int j = PV_cells[3 * PV_n + 1];                                                    \
+                  int k = PV_cells[3 * PV_n + 2];                                                    \
+                  if (i >= PV_ixl && i < PV_ixu &&                                                   \
+                      j >= PV_iyl && j < PV_iyu &&                                                   \
+                      k >= PV_izl && k < PV_izu)                                                     \
+                  {                                                                                  \
+                    int ival = PV_ival0 + PV_n;                                                      \
+                    UNPACK(locals);                                                                  \
+                    setup;                                                                           \
+                    switch (PV_f)                                                                    \
+                    {                                                                                \
+                    f_left;                                                                          \
+                    f_right;                                                                         \
+                    f_down;                                                                          \
+                    f_up;                                                                            \
+                    f_back;                                                                          \
+                    f_front;                                                                         \
+                    }                                                                                \
+                    finalize;                                                                        \
+                  }                                                                                  \
+                };                                                                                   \
+                                                                                                     \
+                Kokkos::parallel_for(Kokkos::RangePolicy<>(0, PV_nfaces), lambda_body);              \
+                Kokkos::fence();                                                                     \
+              }                                                                                      \
+            }                                                                                        \
+          }                                                                                          \
+          (void)i; (void)j; (void)k;                                                                 \
         }
 
 /** Loop definition for Kokkos. */

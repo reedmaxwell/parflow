@@ -307,6 +307,18 @@ GrGeomSolid   *GrGeomNewSolid(
     for (int ipatch = 0; ipatch < 2 * num_patches; ipatch++)
       (new_grgeomsolid->ival[f][ipatch]) = NULL;
   }
+
+  new_grgeomsolid->face_cells = talloc(int**, GrGeomOctreeNumFaces);
+  new_grgeomsolid->face_count = talloc(int*, GrGeomOctreeNumFaces);
+  new_grgeomsolid->face_ival0 = talloc(int*, GrGeomOctreeNumFaces);
+  new_grgeomsolid->face_built = talloc(char*, GrGeomOctreeNumFaces);
+  for (int f = 0; f < GrGeomOctreeNumFaces; f++)
+  {
+    new_grgeomsolid->face_cells[f] = ctalloc(int*, 2 * num_patches);
+    new_grgeomsolid->face_count[f] = ctalloc(int, 2 * num_patches);
+    new_grgeomsolid->face_ival0[f] = ctalloc(int, 2 * num_patches);
+    new_grgeomsolid->face_built[f] = ctalloc(char, 2 * num_patches);
+  }
 #endif
 
   for (int f = 0; f < GrGeomOctreeNumFaces; f++)
@@ -375,8 +387,23 @@ void          GrGeomFreeSolid(
         _tfree_device(ival);
     }
     tfree(solid->ival[f]);
+
+    for (int ipatch = 0; ipatch < 2 * GrGeomSolidNumPatches(solid); ipatch++)
+    {
+      int *cells = GrGeomSolidFaceCells(solid, ipatch, f);
+      if (cells)
+        _tfree_device(cells);
+    }
+    tfree(solid->face_cells[f]);
+    tfree(solid->face_count[f]);
+    tfree(solid->face_ival0[f]);
+    tfree(solid->face_built[f]);
   }
   tfree(solid->ival);
+  tfree(solid->face_cells);
+  tfree(solid->face_count);
+  tfree(solid->face_ival0);
+  tfree(solid->face_built);
 #endif
 
   GrGeomFreeOctree(GrGeomSolidData(solid));
